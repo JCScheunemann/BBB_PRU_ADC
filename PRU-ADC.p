@@ -1,4 +1,21 @@
-//ADC-PRU (c) 2016-Jean Carlos Scheunemann
+// *****************************************************************************/
+// file:   PRU-ADC.p
+//
+// brief:  Use PRU0 to TSC_ADC controller for use in general purpose A2D conversion and store data on PRU-ARM shared Memory.
+//
+// *****************************************************************************/
+//  (C) Copyright 2016 Engenharia Eletrônica UFPel
+//
+// This program is free software; you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation; version 2 of the License.             
+//                                                                     
+// *****************************************************************************/
+//  author     J. C. Scheunemann
+//
+//  version    0.1     Created
+// *****************************************************************************/
+
 
 
 // Lib definitions
@@ -57,6 +74,10 @@ START:		//set initial value to vars and configure ADC hardware to work
 	LDI 	tmp2, 0x00000000
 	LDI 	mem_counter, 0x00000000
 	LDI 	tmp_adc, 0x00000000
+	// Enable OCP master port
+    LBCO      r0, CONST_PRUCFG, 4, 4
+    CLR     r0, r0, 4         // Clear SYSCFG[STANDBY_INIT] to enable OCP master port
+    SBCO      r0, CONST_PRUCFG, 4, 4
 	//ADC init
 	LDI 	adc_,	ADC_TSC			//store ADC_TSC memory address value in adc_ 
 	LDI 	tmp0, 	2				//store 0010 on tmp0
@@ -101,7 +122,7 @@ START:		//set initial value to vars and configure ADC hardware to work
 	LDI 	tmp0, 0x0003			//store 00000011 on tmp0
 	SBBO	tmp0, adc_, 0x0040, 1	//set STEP_ID_tag to 1 and start ADC_TSC
 	
-	//delay for the first adc read
+	//delay for the first ADC read
 	MOV delay, 1250					
 DELAY1:	
 	SUB delay, delay, 1                       // subtract 1 from R1

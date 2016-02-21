@@ -1,128 +1,122 @@
+
 /******************************************************************************
 * Include Files                                                               *
 ******************************************************************************/
+
 // Standard header files
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
 #include <string.h>
-#include <time.h>
 
 // Driver header file
-#include <pruss/prussdrv.h>
-#include <pruss/pruss_intc_mapping.h>
+#include "prussdrv.h"
+#include <pruss_intc_mapping.h>
 
 /******************************************************************************
-* Local Macro Declarations                                                    * 
+* Explicit External Declarations                                              *
 ******************************************************************************/
+
+/******************************************************************************
+* Local Macro Declarations                                                    *
+******************************************************************************/
+
 #define PRU_NUM 	 0
+#define ADDEND1	 	 0x98765400u
+#define ADDEND2		 0x12345678u
+#define ADDEND3		 0x10210210u
+
+#define DDR_BASEADDR     0x80000000
+#define OFFSET_DDR	 0x00001000
 #define OFFSET_SHAREDRAM 2048		//equivalent with 0x00002000
 
 #define PRUSS0_SHARED_DATARAM    4
-#define SAMPLING_RATE 16000 //16khz
-#define BUFF_LENGTH SAMPLING_RATE
-#define PRU_SHARED_BUFF_SIZE 500
-#define CNT_ONE_SEC SAMPLING_RATE / PRU_SHARED_BUFF_SIZE
 
 /******************************************************************************
-* Functions declarations                                                      * 
+* Local Typedef Declarations                                                  *
 ******************************************************************************/
-static void Enable_ADC();
-static void Enable_PRU();
-static unsigned int ProcessingADC1(unsigned int value);
+
 
 /******************************************************************************
-* Global variable Declarations                                                * 
+* Local Function Declarations                                                 *
 ******************************************************************************/
-static void *sharedMem;
+
+static int LOCAL_exampleInit ( );
+static unsigned short LOCAL_examplePassed ( unsigned short pruNum );
+
+/******************************************************************************
+* Local Variable Definitions                                                  *
+******************************************************************************/
+
+
+/******************************************************************************
+* Intertupt Service Routines                                                  *
+******************************************************************************/
+
+
+/******************************************************************************
+* Global Variable Definitions                                                 *
+******************************************************************************/
+
+static int mem_fd;
+static void *ddrMem, *sharedMem;
+
 static unsigned int *sharedMem_int;
 
 /******************************************************************************
-* Main                                                                        * 
+* Global Function Definitions                                                 *
 ******************************************************************************/
-int main (int argc, char* argv[])
+int main (void)
 {
-	FILE *fp_out;
     unsigned int ret;
     tpruss_intc_initdata pruss_intc_initdata = PRUSS_INTC_INITDATA;
-	int i = 0, cnt = 0, total_cnt = 0;
-	int target_buff = 1;
-	int sampling_period = 0;
 
-	if(argc != 2){
-		printf("\tERROR: Sampling period is required by second\n");
-		printf("\t       %s [sampling period]\n", argv[0]);
-		return 0;
-	}
-	sampling_period = atoi(argv[1]);
+    printf("\nINFO: Starting %s example.\r\n", "PRU_memAcc_DDR_sharedRAM");
+    /* Initialize the PRU */
+    prussdrv_init ();
 
-	/* Enable PRU */
-	Enable_PRU();
-	/* Enable ADC */
-	Enable_ADC();
-	/* Initializing PRU */
-    prussdrv_init();
+    /* Open PRU Interrupt */
     ret = prussdrv_open(PRU_EVTOUT_0);
-    if (ret){
-        printf("\tERROR: prussdrv_open open failed\n");
+    if (ret)
+    {
+        printf("prussdrv_open open failed\n");
         return (ret);
     }
+
+    /* Get the interrupt initialized */
     prussdrv_pruintc_init(&pruss_intc_initdata);
-    printf("\tINFO: Initializing.\r\n");
-    prussdrv_map_prumem(PRUSS0_SHARED_DATARAM, &sharedMem);
-    sharedMem_int = (unsigned int*) sharedMem;
-	
-	/* Open save file */
-	fp_out = fopen("Results.txt", "w");
-	if(fp_out == NULL){
-		printf("\tERROR: file open failed\n");
-		return 0;
-	}
 
-	/* Executing PRU. */
-	printf("\tINFO: Sampling is started for %d seconds\n", sampling_period);
-    printf("\tINFO: Collecting");
-    prussdrv_exec_program (PRU_NUM, "./ADCCollector.bin");
-	/* Read ADC */
-	while(1){
-		while(1){
-			if(sharedMem_int[OFFSET_SHAREDRAM] == 1 && target_buff == 1){ // First buffer is ready
-				for(i=0; i<PRU_SHARED_BUFF_SIZE; i++){
-					fprintf(fp_out, "%d\n", ProcessingADC1(sharedMem_int[OFFSET_SHAREDRAM + 1 + i]));
-				}
-				target_buff = 2;
-				break;
-			}else if(sharedMem_int[OFFSET_SHAREDRAM] == 2 && target_buff == 2){ // Second buffer is ready
-				for(i=0; i<PRU_SHARED_BUFF_SIZE; i++){
-					fprintf(fp_out, "%d\n", ProcessingADC1(sharedMem_int[OFFSET_SHAREDRAM + PRU_SHARED_BUFF_SIZE + 1 + i]));
-				}
-				target_buff = 1;
-				break;
-			}
-		}
+    /* Initialize example */
+    printf("\tINFO: Initializing example.\r\n");
+    LOCAL_exampleInit(PRU_NUM);
 
-		if(++cnt == CNT_ONE_SEC){
-			printf(".");
-			total_cnt += cnt;
-			cnt = 0;
-		}
+    /* Execute example on PRU */
+    printf("\tINFO: Executing example.\r\n");
+    prussdrv_exec_program (PRU_NUM, "./PRU-ADC.bin");
 
-		if(total_cnt == CNT_ONE_SEC * sampling_period){
-			printf("\n\tINFO: Sampling completed ...\n");
-			break;
-		}
-	}
-
-	fclose(fp_out);
+    /* Wait until PRU0 has finished execution */
+    printf("\tINFO: Waiting for HALT command.\r\n");
+    prussdrv_pru_wait_event (PRU_EVTOUT_0);
     printf("\tINFO: PRU completed transfer.\r\n");
     prussdrv_pru_clear_event (PRU_EVTOUT_0, PRU0_ARM_INTERRUPT);
 
-    /* Disable PRU*/
+    /* Check if example passed */
+    if ( LOCAL_examplePassed(PRU_NUM) )
+    {
+        printf("Example executed succesfully.\r\n");
+    }
+    else
+    {
+        printf("Example failed.\r\n");
+    }
+
+    /* Disable PRU and close memory mapping*/
     prussdrv_pru_disable(PRU_NUM);
-    prussdrv_exit();
+    prussdrv_exit ();
+    munmap(ddrMem, 0x0FFFFFFF);
+    close(mem_fd);
 
     return(0);
 }
@@ -130,48 +124,50 @@ int main (int argc, char* argv[])
 /*****************************************************************************
 * Local Function Definitions                                                 *
 *****************************************************************************/
-/* Enable ADC */
-static int Enable_ADC()
-{
-	FILE *ain;
 
-	ain = fopen("/sys/devices/bone_capemgr.9/slots", "w");
-	if(!ain){
-		printf("\tERROR: /sys/devices/bone_capemgr.9/slots open failed\n");
-		return -1;
-	}
-	fseek(ain, 0, SEEK_SET);
-	fprintf(ain, "cape-bone-iio");
-	fflush(ain);
-	return 0;
+static int LOCAL_exampleInit (  )
+{
+    void *DDR_regaddr1, *DDR_regaddr2, *DDR_regaddr3;
+
+    /* open the device */
+    mem_fd = open("/dev/mem", O_RDWR);
+    if (mem_fd < 0) {
+        printf("Failed to open /dev/mem (%s)\n", strerror(errno));
+        return -1;
+    }
+
+    /* map the DDR memory */
+    ddrMem = mmap(0, 0x0FFFFFFF, PROT_WRITE | PROT_READ, MAP_SHARED, mem_fd, DDR_BASEADDR);
+    if (ddrMem == NULL) {
+        printf("Failed to map the device (%s)\n", strerror(errno));
+        close(mem_fd);
+        return -1;
+    }
+
+    /* Store Addends in DDR memory location */
+    DDR_regaddr1 = ddrMem + OFFSET_DDR;
+    DDR_regaddr2 = ddrMem + OFFSET_DDR + 0x00000004;
+    DDR_regaddr3 = ddrMem + OFFSET_DDR + 0x00000008;
+
+    *(unsigned long*) DDR_regaddr1 = ADDEND1;
+    *(unsigned long*) DDR_regaddr2 = ADDEND2;
+    *(unsigned long*) DDR_regaddr3 = ADDEND3;
+
+    return(0);
 }
 
-/* Enable PRU */
-static int Enable_PRU()
+static unsigned short LOCAL_examplePassed ( unsigned short pruNum )
 {
-		FILE *ain;
+    unsigned int result_0, result_1, result_2;
 
-		ain = fopen("/sys/devices/bone_capemgr.9/slots", "w");
-		if(!ain){
-			printf("\tERROR: /sys/devices/bone_capemgr.9/slots open failed\n");
-			return -1;
-		}
-		fseek(ain, 0, SEEK_SET);
-		fprintf(ain, "BB-BONE-PRU-01");
-		fflush(ain);
-		return 0;
-}
+     /* Allocate Shared PRU memory. */
+    prussdrv_map_prumem(PRUSS0_SHARED_DATARAM, &sharedMem);
+    sharedMem_int = (unsigned int*) sharedMem;
 
-/* 
- * FIFO0DATA register includes both ADC and channelID
- * so we need to remove the channelID
- */
-static unsigned int ProcessingADC1(unsigned int value)
-{
-	unsigned int result = 0;
+    result_0 = sharedMem_int[OFFSET_SHAREDRAM];
+    result_1 = sharedMem_int[OFFSET_SHAREDRAM + 1];
+    result_2 = sharedMem_int[OFFSET_SHAREDRAM + 2];
 
-	result = value << 20;
-	result = result >> 20;
+    return ((result_0 == ADDEND1) & (result_1 ==  ADDEND2) & (result_2 ==  ADDEND3)) ;
 
-	return result;
 }
